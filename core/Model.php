@@ -6,6 +6,12 @@ abstract class Model
     private $conn;
     private $table;
     private $query;
+    private $uniqueCol = array();
+    private $whereValues = array();
+    private $createdAtExist = false;
+    private $createdAtPosition = null;
+    private $updatedAtExist = false;
+    private $updatedAtPosition = null;
 
     public function __construct(){
         $this->conn = DB::getInstance()->getConn();
@@ -15,183 +21,149 @@ abstract class Model
         $this->table = $table;
     }
 
+    public function setUniqueCol($uniqueCol){
+        $this->uniqueCol = toArray($uniqueCol);
+    }
+
     public function tableExists($table) {
-        $result = $this->conn->query("SHOW TABLES LIKE '".$table."'");
-        if($result->num_rows > 0){
+        $query = $this->conn->query("SHOW TABLES LIKE '".$table."'");
+        if($query->rowCount() > 0){
             return true;
         }else{
             return false;
         }
     }
 
-    public function getAll(){
-        return $this->select()->get();
-    }
-
-    public function getUniqueCol(){
-        if(isset($this->uniqueCol)){
-            return $this->uniqueCol;
-        }else{
-            return null;
-        }
-    }
-
-    public function insert($values,$columns=null, $cus_pk=false){
-        $uniqueCol=$this->getUniqueCol();
-        $duplicate = false;
-        $query = "SHOW columns FROM ".$this->table;
+    public function getColumns(){
+        $query = "SHOW COLUMNS FROM ".$this->table;
         $result = $this->conn->query($query);
-        $allCol = [];
-        while($row = $result->fetch_array()){
+        $allCol = array();
+        while($row = $result->fetch(PDO::FETCH_ASSOC)){
             array_push($allCol,$row['Field']);
         }
-        if(is_null($columns)){
-            $columns = $allCol;
-            if(!$cus_pk){
-                array_shift($columns);
-            }
-        }else{
-            $columns = toArray($columns);
+
+        //check if all unique column present in the table
+        $commonArray = array_intersect($this->uniqueCol,$allCol);
+        if(sizeof($commonArray) != sizeof($this->uniqueCol)){
+            printError("Unique Columns not present in the table");
         }
+
+        $this->createdAtPosition = (array_search(CREATED_AT,$allCol));
+        $this->updatedAtPosition = (array_search(UPDATED_AT,$allCol));
+
+        if($this->createdAtPosition !== false){
+            $this->createdAtExist = true;
+        }
+        if($this->updatedAtPosition !== false){
+            $this->updatedAtExist = true;
+        }
+
+//        var_dump($this->createdAtExist);
+//        var_dump($this->updatedAtExist);
+//        die();
+        return $allCol;
+    }
+
+    private function insertInArray($values){
+        if($this->createdAtExist && $this->updatedAtExist){
+            if($this->createdAtPosition > $this->updatedAtPosition){
+                $values = insertIntoArray($this->updatedAtPosition,$values,Date::getCurrentDateTime());
+                $values = insertIntoArray($this->createdAtPosition,$values,Date::getCurrentDateTime());
+            }else{
+                $values = insertIntoArray($this->createdAtPosition,$values,Date::getCurrentDateTime());
+                $values = insertIntoArray($this->updatedAtPosition,$values,Date::getCurrentDateTime());
+            }
+
+        }elseif($this->createdAtExist){
+            $values = insertIntoArray($this->createdAtPosition,$values,Date::getCurrentDateTime());
+        }elseif($this->updatedAtExist){
+            insertIntoArray($this->updatedAtPosition,$values,Date::getCurrentDateTime());
+        }
+
+        return $values;
+    }
+
+    private function checkDuplicateEntry(){
+
+    }
+
+    public function insert($values,$columns=null, $remove_pk=true){
         $values = toArray($values);
-
-        if(!is_null($uniqueCol)){
-            $duplicate = $this->checkDuplicate($columns,$values,$uniqueCol);
+        if(is_null($columns)){
+            $columns = $this->getColumns();
+        }else{
+            $remove_pk = false;
         }
-//        return $duplicate;
-        if(count(array_diff($columns,$allCol))===0){
-            if(!$duplicate){
-                $col = implode(',',$columns);
-                $val="";
-                foreach ($values as $v){
-                    $val .= "'".$v."',";
-                }
-                $val = rtrim($val,',');
-                $statement = "INSERT INTO ".$this->table." (".$col.") VALUES (".$val.")";
-                $result = $this->conn->query($statement);
-                if($result){
-                    $last_id = $this->conn->insert_id;
-                    return $last_id;
-                    //$last_record = $this->select()->where("id",$last_id)->getData();
-//                    return status(OK,$last_id);
-                }else{
-                    return "Error: Not Found";
-//                    return status(NOT_FOUND);
-                }
-            }else{
-//                return status(EXIST);
-                return "Error: Duplicate";
+        if($remove_pk){
+            array_shift($columns);
+        }
+
+        //$values = $this->insertInArray($values);
+
+        $totalColumnsSize = sizeof($columns);
+        //printError($totalColumnsSize);
+
+        if($valueSize = sizeof($values) != $totalColumnsSize){
+            printError("Column Size $totalColumnsSize and Value Size $valueSize mismatch");
+            die();
+        }
+
+        // check for duplicate in the unique columns
+        if(!is_null($this->uniqueCol)){
+            $isDuplicatePresent = $this->checkDuplicateEntry();
+        }
+
+        $columnString = implode(',',$columns);
+        $questionMark = "";
+        while($totalColumnsSize > 0){
+            $questionMark .= "?";
+            if($totalColumnsSize != 1){
+                $questionMark .= ",";
             }
-        }else{
-            echo "Columns Not found: ".implode(',',array_diff($columns, $allCol));
+            $totalColumnsSize--;
         }
-
+        $this->query = "INSERT INTO ".$this->table." (".$columnString.") VALUES (".$questionMark.")";
+        $this->exe($values);
     }
 
-    public function delete($id){
-        $statement = "DELETE FROM ".$this->table." WHERE id=".$id;
-        if($this->conn->query($statement)){
-//            return status(OK,$id);
-            return $id;
-        }else{
-//            return status(ERROR);
-            return "Error: Delete Failed";
-        }
-    }
 
-    public function update($col,$val,$id){
-        $col = toArray($col);
-        $val = toArray($val);
-        if(count($col) === count($val)){
-            $string="";
-            for($i=0;$i<count($col);$i++){
-                $string .= $col[$i]."= '".$val[$i]."', ";
+    // the function is used for inserting or updating or deleting
+    private function exe($values){
+        //printError($this->query);
+
+        try{
+            $stmt = $this->conn->prepare($this->query);
+            foreach($values as $k => $v){
+                $stmt->bindValue(++$k,$v);
             }
-            $string = rtrim($string,', ');
-            $statement = "UPDATE ".$this->table." SET ".$string." WHERE id=".$id;
-            $result = $this->conn->query($statement);
-            $count = $this->conn->affected_rows;
-            if($result){
-                if($count>0){
-                    return $id;
-//                    return status(OK,$id);
-                }else{
-                    return "No Change Occured";
-//                    return status(EXIST);
-                }
-            }else{
-                return "Error";
-//                return status(ERROR);
-            }
-        }else{
-            echo "coulumn and value mismatched";
+            $stmt->execute();
+
+        }catch (Exception $e){
+            printError($e->getMessage());
         }
+        $stmt->close();
     }
 
-//    start method chaining
-    public function select($cols='*',$from=null){
-        if($from !== null){
-            $this->query = "SELECT ".$cols." FROM ".$this->table.",".$from." ";
+    public function select($cols = null){
+        if(is_null($cols)){
+            $this->query = "SELECT * FROM ".$this->table;
         }else{
-            $this->query = "SELECT ".$cols." FROM ".$this->table." ";
+            $cols = toArray($cols);
+            $this->query = "SELECT (".implode(',',$cols).") FROM ".$this->table;
         }
 
         return $this;
     }
 
-    public function where($col,$val,$oper='='){
-        if(strpos($this->query,' WHERE ')){
-            $this->query .= "AND ".$col.$oper."'".$val."' ";
+    public function where($col,$val,$op = '='){
+        array_push($this->whereValues,$val);
+//        if where present in the query
+        if(strpos($this->query,'WHERE') !== false){
+            $this->query .= " AND $col $op ?";
         }else{
-            $this->query .= "WHERE ".$col.$oper."'".$val."' ";
+            $this->query .= " WHERE $col $op ?";
         }
-        return $this;
-    }
 
-    public function whereIn($col,$val){
-        if(is_array($val)){
-            $val = implode($val,',');
-        }
-        if(strpos($this->query,' WHERE ')){
-            $this->query .= "AND ".$col." IN (".$val.") ";
-        }else{
-            $this->query .= "WHERE ".$col." IN (".$val.") ";
-        }
-        return $this;
-    }
-
-    public function whereNotIn($col,$val){
-        if(is_array($val)){
-            $val = implode($val,',');
-        }
-        if(strpos($this->query,' WHERE ')){
-            $this->query .= "AND ".$col." NOT IN (".$val.") ";
-        }else{
-            $this->query .= "WHERE ".$col." NOT IN (".$val.") ";
-        }
-        return $this;
-    }
-
-    public function whereJoin($col,$val,$oper='='){
-        if(strpos($this->query,' WHERE ')){
-            $this->query .= "AND ".$col.$oper.$val." ";
-        }else{
-            $this->query .= "WHERE ".$col.$oper.$val." ";
-        }
-        return $this;
-    }
-
-    public function whereBetween($col,$values){
-        if(strpos($this->query,' WHERE ')){
-            $this->query .= "AND ".$col." BETWEEN ".$values[0]." AND ".$values[1]." ";
-        }else{
-            $this->query .= "WHERE ".$col." BETWEEN ".$values[0]." AND ".$values[1]." ";
-        }
-        return $this;
-    }
-
-    public function query($statement){
-        $this->query .= $statement." ";
         return $this;
     }
 
@@ -204,74 +176,78 @@ abstract class Model
         return $this;
     }
 
-    public function chunk($start, $range){
-        $this->query .= "LIMIT ".$start.", ".$range." ";
-        return $this;
+    public function innerJoin($table,$ownCol,$otherCol){
+        if(!empty($table) && !empty($ownCol) && !empty($otherCol)){
+            $this->query .= " INNER JOIN $table ON ".$this->table.".$ownCol  = $table.$otherCol";
+            return $this;
+        }else{
+            printError("All Parameters are not given for innerJoin");
+            die();
+        }
     }
 
-    public function join($tableName, $current='id', $foreign='id')
-    {
-        $this->query .= "JOIN ".$tableName." ON ".$this->table.".".$current."=".$tableName.".".$foreign." ";
-        return $this;
-    }
-
-    public function groupBy($col){
-        $this->query .="GROUP BY ".$col." ";
+    public function raw($query,$values){
+        $this->query = $query;
+        if(!is_array($values)){
+            array_push($this->whereValues,$values);
+        }else{
+            $this->whereValues = array_merge($this->whereValues,$values);
+        }
         return $this;
     }
 
     public function get(){
-//        echo $this->query;
-        $res = $this->conn->query($this->query);
-        $result = array();
-        if($res){
-            if($res->num_rows >0 ){
-                while($row = $res->fetch_assoc()){
-                    array_push($result, $row);
+        $arr = array();
+        if(sizeof($this->whereValues) == 0){
+            try{
+                $stmt = $this->conn->query($this->query);
+
+                while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+                    $arr[] = $row;
                 }
-                return $result;
-            }else{
-                return "Error: Not Found";
-//                return status(NOT_FOUND);
+            }catch (Exception $e){
+                printError($e->getMessage());
             }
-
         }else{
-            return "Error";
-//            return status(ERROR);
+            try{
+
+                $stmt = $this->conn->prepare($this->query);
+                foreach($this->whereValues as $k => $v){
+                    $stmt->bindValue(++$k,$v);
+                }
+                $stmt->execute();
+                while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+                    $arr[] = $row;
+                }
+            }catch (Exception $e){
+                printError($e->getMessage());
+            }
         }
-    }
 
-    public function count(){
-        $res = $this->conn->query($this->query);
-        return $res->num_rows;
-    }
-
-    private function getData(){
-        $res = $this->conn->query($this->query);
-        return (array)$res->fetch_assoc();
+        //printError($this->query);
+        return $arr;
     }
 
     public function toSql(){
-        echo $this->query;
+        printError($this->query);
     }
 
-    private function checkDuplicate($columns,$values,$uniqueCol){
-        $duplicate = false;
-        $found = array_search($uniqueCol,$columns);
-        if($found !== false){
-            $val = $values[$found];
-            if($this->select()->where($uniqueCol, $val)->count()){
-                $duplicate = true;
+    private function dataType($values){
+        $bindString = "";
+        foreach($values as $value) {
+            $valueType = gettype($value);
+            if ($valueType == 'string') {
+                $bindString .= 's';
+            } else if ($valueType == 'integer') {
+                $bindString .= 'i';
+            } else if ($valueType == 'double') {
+                $bindString .= 'd';
+            } else {
+                $bindString .= 'b';
             }
         }
-        // echo $this->select()->where($uniqueCol, $val)->toSql();
-        // var_dump($this->select()->where($uniqueCol, $val)->count());
-        // var_dump($duplicate);
-        return $duplicate;
-//        if(!$duplicate){
-//            return true;
-//        }else{
-//            return false;
-//        }
+
+        return $bindString;
     }
+
 }

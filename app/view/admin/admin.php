@@ -9,6 +9,7 @@
 
 <body>
     <h2>I am in Admin</h2>
+    <?php dnd($data['result']) ?>
 </body>
 
 </html>

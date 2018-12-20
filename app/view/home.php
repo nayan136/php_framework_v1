@@ -9,6 +9,11 @@
 
 <body>
     <h2>I am in Home</h2>
+    <form action="<?php url('post'); ?>" method="post">
+        <?php Csrf::createToken(); ?>
+        <input type="text" name="name">
+        <input type="submit" value="Submit">
+    </form>
 </body>
 
 </html>

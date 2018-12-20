@@ -15,6 +15,7 @@ class View
         }else{
             die("View Does not exist");
         }
-        //return ob_get_clean();
+
+        
     }
 }

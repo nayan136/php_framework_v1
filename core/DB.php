@@ -5,16 +5,16 @@ class DB{
     private $_connection;
 
     private function __construct() {
-        try{
-            $this->_connection = new mysqli(HOST, USERNAME,PASSWORD, DB);
-            if($this->_connection){
-                return $this->_connection;
-            }else{
-                die("Error");
-            }
-
-        }catch(Exception $e){
-            echo $e->getMessage();
+        $dsn = "mysql:host=".HOST.";dbname=".DB.";charset=utf8mb4";
+        $options = [
+            PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
+            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+            PDO::ATTR_EMULATE_PREPARES   => false,
+        ];
+        try {
+            $this->_connection = new PDO($dsn, USERNAME, PASSWORD, $options);
+        } catch (Exception $e) {
+            printError($e->getMessage());
         }
 
     }
@@ -29,7 +29,6 @@ class DB{
     public function getConn(){
         return $this->_connection;
     }
-
 }
 
 ?>

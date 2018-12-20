@@ -2,37 +2,47 @@
 
 class Router
 {
-    private static $_ROUTE_LIST = array();
+    private static $_GET_ROUTE_LIST = array();
+    private static $_POST_ROUTE_LIST = array();
 
     public static function route($url){
-
-        $hasMatch = false;
+        $hasMatch = false; 
         $hasParameter = false;
         $parameter = null;
         $controllerWithFunction = null;
 
-        foreach(self::$_ROUTE_LIST as $k=>$v){
+        foreach(self::$_GET_ROUTE_LIST as $k=>$v){
             $controllerWithFunction = $v;
 
             if(strpos($k,'/?') !== false){
                 $hasParameter = true;
                 $k = str_ireplace('/?','',$k);
             }
-
-
             $hasMatch = self::matchUrl($k,$url);
-//            echo "Match :";
-//            var_dump($hasMatch);
             if($hasMatch){
                 $parameter = str_replace($k,'',$url);
                 break;
             }
-//            $length = strpos($url,$k);
-//            printError($length);
-//            if($length !== false){
-//                $hasMatch = true;
-//                break;
-//            }
+        }
+
+        if($hasMatch === false){
+            //TODO: for post url
+            foreach(self::$_POST_ROUTE_LIST as $k=>$v){
+                $controllerWithFunction = $v;
+
+                if(strpos($k,'/?') !== false){
+                    $hasParameter = true;
+                    $k = str_ireplace('/?','',$k);
+                }
+                if(self::checkIfTokenMatch() === false){
+                    die();
+                }
+                $hasMatch = self::matchUrl($k,$url);
+                if($hasMatch){
+                    $parameter = str_replace($k,'',$url);
+                    break;
+                }
+            }
         }
 
         if($hasMatch){
@@ -56,14 +66,6 @@ class Router
                 }
             }
 
-//            $functionWithParameter = (isset($array[0]))?(explode('/',$array[0])):toArray(DEFAULT_FUNCTION);
-//            $function = $functionWithParameter[0];
-//            printError("Function: ".$function);
-//            dnd($array);
-//            array_shift($array);
-//            $parameter = $url;
-//            dnd($parameter);
-
             $classArray = explode('/',$controller);
             $controller = $classArray[sizeof($classArray)-1];
             $class = implode(DS,$classArray);
@@ -75,9 +77,7 @@ class Router
             }
 
             if(method_exists($controller,$function)){
-                printError("Controller: ".$controller);
                 $obj = new $controller;
-                dnd($parameter);
                 if($hasParameter){
                     call_user_func_array(array($obj, $function),$parameter);
                 }else{
@@ -90,10 +90,6 @@ class Router
                 die();
             }
         }else{
-
-            printError("URL: ".$url);
-            dnd(self::$_ROUTE_LIST);
-
             echo "404 - Not Found";
             die();
         }
@@ -101,7 +97,6 @@ class Router
     }
 
     static function matchUrl($route,$actualUrl){
-        echo "<br>Route: $route|Actual URL:".$actualUrl."<br>";
         if(strlen($route) > strlen($actualUrl) || is_null($actualUrl)){
             return false;
         }elseif($route === $actualUrl){
@@ -109,21 +104,46 @@ class Router
         }else{
             $urlArray = explode('/',$actualUrl);
             array_pop($urlArray);
-            dnd($urlArray);
             $removeLastPart = implode('/',$urlArray);
             return self::matchUrl($route, $removeLastPart);
         }
     }
 
-    public static function set($route,$controller){
+    private static function checkIfTokenMatch(){
+        if(isset($_POST[TOKEN]) && (Csrf::matchToken($_POST[TOKEN]) === true)){
+            // token match
+            return true;
+        }else{
+            printError("Token Mismatch");
+            return false;
+
+        }
+    }
+
+    private static function set($route,$controller,$type){
         if($route != '/'){
             $route = trim($route,'/');
         }
-        if(array_key_exists($route,self::$_ROUTE_LIST)){
+        if(array_key_exists($route,self::$_GET_ROUTE_LIST) || array_key_exists($route,self::$_POST_ROUTE_LIST)){
             printError("The Route ($route) is already present");
             die();
         }
+        if($type == GET){
+            self::$_GET_ROUTE_LIST[$route] = $controller;
+        }elseif($type == POST){
+            self::$_POST_ROUTE_LIST[$route] = $controller;
+        }else{
+            printError("Type $type Mismatch");
+        }
 
-        self::$_ROUTE_LIST[$route] = $controller;
     }
+
+    public static function get($route,$controller){
+        self::set($route,$controller,GET);
+    }
+
+    public static function post($route,$controller){
+        self::set($route,$controller,POST);
+    }
+
 }
